@@ -1,0 +1,100 @@
+import json
+from http import HTTPStatus
+
+from django.http import JsonResponse, HttpResponse, HttpResponseNotAllowed
+
+from django.core.paginator import Paginator
+from django.shortcuts import resolve_url, get_object_or_404
+
+from devpro.core.models import Author, Book
+
+DEFAULT_PAGE_SIZE = 25
+
+
+def authors(request):
+    page_number = request.GET.get('page', 1)
+    page_size = request.GET.get('page_size', DEFAULT_PAGE_SIZE)
+    name = request.GET.get('name')
+
+    queryset = Author.objects.all()
+    if name:
+        queryset = queryset.filter(name__icontains=name)
+    paginator = Paginator(queryset, per_page=page_size)
+    page = paginator.get_page(page_number)
+
+    return JsonResponse(page2dict(page))
+
+
+def book_list_create(request):
+    if request.method == 'POST':
+        payload = json.load(request)
+        authorss = payload.pop('authors')
+        book = Book.objects.create(**payload)
+        book.authors.set(authorss)
+
+        response = JsonResponse(book.to_dict(), status=HTTPStatus.CREATED)
+        response['location'] = resolve_url(book)
+
+        return response
+    else:
+        page_number = request.GET.get('page', 1)
+        page_size = request.GET.get('page_size', DEFAULT_PAGE_SIZE)
+        publication_year = request.GET.get('publication_year')
+
+        queryset = Book.objects.all()
+
+        if publication_year:
+            queryset = queryset.filter(publication_year=publication_year)
+
+        if author_id := request.GET.get('author'):
+            queryset = queryset.filter(authors=author_id)
+
+        paginator = Paginator(queryset, per_page=page_size)
+        page = paginator.get_page(page_number)
+
+        return JsonResponse(page2dict(page))
+
+
+def book_read_update_delete(request, pk):
+    book = get_object_or_404(Book, pk=pk)
+
+    handlers = {
+        'GET': _book_read,
+        'PUT': _book_update,
+        'DELETE': _book_delete
+    }
+    try:
+        handler = handlers[request.method]
+    except KeyError:
+        return HttpResponseNotAllowed()
+    else:
+        return handler(request, book)
+
+
+def _book_read(request, book):
+    return JsonResponse(book.to_dict())
+
+
+def _book_update(request, book):
+    payload = json.load(request)
+    book.name = payload['name']
+    book.edition = payload['edition']
+    book.publication_year = payload['publication_year']
+    book.save()
+    book.authors.set(payload['authors'])
+
+    return JsonResponse({})
+
+
+def _book_delete(request, book):
+    book.delete()
+    return HttpResponse(status=HTTPStatus.NO_CONTENT)
+
+
+def page2dict(page):
+    return {
+        'data': [a.to_dict() for a in page],
+        'count': page.paginator.count,
+        'current_page': page.number,
+        'num_pages': page.paginator.num_pages,
+    }
